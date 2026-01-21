@@ -17,8 +17,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy backend code
-COPY ../backend /app/backend
-COPY ../requirements.txt /app/requirements.txt
+# From context backend/services/{service_name}, go up 2 levels to get backend/
+COPY ../../ /app/backend
+# Go up 3 levels to get project root requirements.txt
+COPY ../../../requirements.txt /app/requirements.txt
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
