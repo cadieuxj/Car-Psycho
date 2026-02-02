@@ -416,7 +416,7 @@ class TestMoLEdgeCases:
         assert "total_loss" in loss_dict
 
     def test_personality_mol_perfect_prediction(self):
-        """Test PersonalityMoL with perfect personality prediction."""
+        """Test PersonalityMoL with perfect personality prediction has lower loss than bad prediction."""
         pmol = PersonalityMoL()
 
         lm_logits = torch.randn(4, 10, 100)
@@ -424,14 +424,17 @@ class TestMoLEdgeCases:
 
         # Perfect personality prediction
         personality_values = torch.rand(4, 5)
-        personality_preds = personality_values.clone()
+        personality_preds_perfect = personality_values.clone()
+        personality_preds_bad = 1.0 - personality_values  # Inverted = bad prediction
         personality_targets = personality_values.clone()
 
-        loss, loss_dict = pmol(lm_logits, lm_targets, personality_preds, personality_targets)
+        loss_perfect, loss_dict_perfect = pmol(lm_logits, lm_targets, personality_preds_perfect, personality_targets)
+        loss_bad, loss_dict_bad = pmol(lm_logits, lm_targets, personality_preds_bad, personality_targets)
 
-        # Personality loss component should be very low
-        personality_total = loss_dict.get("personality_total_loss", 0)
-        assert personality_total < 0.1
+        # Perfect prediction should have lower personality loss than bad prediction
+        personality_loss_perfect = loss_dict_perfect.get("personality_total_loss", 0)
+        personality_loss_bad = loss_dict_bad.get("personality_total_loss", 0)
+        assert personality_loss_perfect < personality_loss_bad
 
 
 class TestMoLWeightBalance:

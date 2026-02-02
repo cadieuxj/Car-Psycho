@@ -203,18 +203,14 @@ class TestNormalizeBig5ChatSample:
         assert result["personality_scores"]["openness"] == 0.5
 
     def test_normalize_invalid_sample(self, temp_dir):
-        """Test normalizing invalid sample returns None."""
+        """Test normalizing sample with missing/invalid data uses defaults."""
         downloader = DatasetDownloader(temp_dir)
 
-        # Create a sample that will cause an exception during normalization
-        with patch.object(downloader, '_normalize_big5_chat_sample', side_effect=Exception("Error")):
-            result = downloader._normalize_big5_chat_sample({})
-
-        # Original method should handle gracefully
-        downloader_real = DatasetDownloader(temp_dir)
-        result = downloader_real._normalize_big5_chat_sample({})
+        # Empty sample should still work with defaults
+        result = downloader._normalize_big5_chat_sample({})
         # With missing fields, it should still work with defaults
         assert result is not None
+        assert "personality_scores" in result
 
 
 class TestNormalizePandoraSample:

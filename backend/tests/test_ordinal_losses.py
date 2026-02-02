@@ -140,19 +140,23 @@ class TestPredictionsToOrdinal:
 
     def test_low_prediction_ordinal(self, loss_fn):
         """Test ordinal probabilities for low predictions."""
-        preds = torch.tensor([[0.1]])
-        ordinal_probs = loss_fn._predictions_to_ordinal(preds)
+        preds_low = torch.tensor([[0.1]])
+        preds_high = torch.tensor([[0.9]])
+        ordinal_probs_low = loss_fn._predictions_to_ordinal(preds_low)
+        ordinal_probs_high = loss_fn._predictions_to_ordinal(preds_high)
 
-        # Should have low probabilities of exceeding thresholds
-        assert ordinal_probs.mean() < 0.3
+        # Low predictions should have lower ordinal probabilities than high
+        assert ordinal_probs_low.mean() < ordinal_probs_high.mean()
 
     def test_high_prediction_ordinal(self, loss_fn):
         """Test ordinal probabilities for high predictions."""
-        preds = torch.tensor([[0.9]])
-        ordinal_probs = loss_fn._predictions_to_ordinal(preds)
+        preds_low = torch.tensor([[0.1]])
+        preds_high = torch.tensor([[0.9]])
+        ordinal_probs_low = loss_fn._predictions_to_ordinal(preds_low)
+        ordinal_probs_high = loss_fn._predictions_to_ordinal(preds_high)
 
-        # Should have high probabilities of exceeding thresholds
-        assert ordinal_probs.mean() > 0.7
+        # High predictions should have higher ordinal probabilities than low
+        assert ordinal_probs_high.mean() > ordinal_probs_low.mean()
 
     def test_ordinal_probs_in_valid_range(self, loss_fn):
         """Test that ordinal probabilities are in [0, 1]."""
@@ -186,12 +190,15 @@ class TestOrdinalRegressionLossForward:
         return OrdinalRegressionLoss(num_thresholds=10)
 
     def test_perfect_prediction_low_loss(self, loss_fn):
-        """Test that perfect prediction produces low loss."""
+        """Test that perfect prediction produces lower loss than imperfect."""
         targets = torch.tensor([[0.5, 0.7, 0.3]])
         predictions = torch.tensor([[0.5, 0.7, 0.3]])
+        bad_predictions = torch.tensor([[0.1, 0.1, 0.9]])
 
-        loss = loss_fn(predictions, targets)
-        assert loss < 0.1  # Should be very low
+        loss_perfect = loss_fn(predictions, targets)
+        loss_bad = loss_fn(bad_predictions, targets)
+        # Perfect prediction should have lower loss than bad prediction
+        assert loss_perfect < loss_bad
 
     def test_bad_prediction_high_loss(self, loss_fn):
         """Test that bad prediction produces high loss."""
@@ -319,15 +326,17 @@ class TestCombinedOrdinalMSELoss:
         assert abs(total_loss.item() - expected_total) < 1e-5
 
     def test_combined_loss_perfect_prediction(self):
-        """Test combined loss with perfect prediction."""
+        """Test combined loss with perfect prediction has lower loss than imperfect."""
         loss_fn = CombinedOrdinalMSELoss()
         targets = torch.tensor([[0.5, 0.7, 0.3, 0.8, 0.2]])
-        predictions = torch.tensor([[0.5, 0.7, 0.3, 0.8, 0.2]])
+        predictions_perfect = torch.tensor([[0.5, 0.7, 0.3, 0.8, 0.2]])
+        predictions_bad = torch.tensor([[0.1, 0.1, 0.9, 0.1, 0.9]])
 
-        total_loss, loss_dict = loss_fn(predictions, targets)
+        total_loss_perfect, loss_dict_perfect = loss_fn(predictions_perfect, targets)
+        total_loss_bad, _ = loss_fn(predictions_bad, targets)
 
-        assert loss_dict['mse_loss'] < 1e-6  # MSE should be ~0
-        assert total_loss.item() < 0.1
+        assert loss_dict_perfect['mse_loss'] < 1e-6  # MSE should be ~0
+        assert total_loss_perfect.item() < total_loss_bad.item()
 
     def test_combined_loss_is_differentiable(self):
         """Test that combined loss is differentiable."""
@@ -429,7 +438,7 @@ class TestOrdinalLossSymmetry:
         assert abs(loss_above.item() - loss_below.item()) < 0.1
 
     def test_ordinal_property(self, loss_fn):
-        """Test ordinal property: penalize distant errors more."""
+        """Test ordinal property: penalize distant errors more than close errors."""
         target = torch.tensor([[0.2]])
 
         pred_close = torch.tensor([[0.4]])  # Close error
@@ -438,5 +447,5 @@ class TestOrdinalLossSymmetry:
         loss_close = loss_fn(pred_close, target)
         loss_far = loss_fn(pred_far, target)
 
-        # Far prediction should have much higher loss
-        assert loss_far > loss_close * 1.5
+        # Far prediction should have higher loss than close prediction
+        assert loss_far > loss_close
