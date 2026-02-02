@@ -1,0 +1,66 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Home Page Snapshot matches snapshot 1`] = `
+<div>
+  <main
+    style="padding: 2rem; font-family: system-ui;"
+  >
+    <h1>
+      Car-Psycho
+    </h1>
+    <p>
+      Psychometric Car Sales Platform
+    </p>
+    <p
+      style="color: rgb(102, 102, 102); margin-top: 1rem;"
+    >
+      Frontend under development...
+    </p>
+    <div
+      style="margin-top: 2rem;"
+    >
+      <h2>
+        Services Status
+      </h2>
+      <ul>
+        <li>
+          Manager Service: 
+          <a
+            href="http://localhost:8001"
+            target="_blank"
+          >
+            Port 8001
+          </a>
+        </li>
+        <li>
+          Inference Service: 
+          <a
+            href="http://localhost:8002"
+            target="_blank"
+          >
+            Port 8002
+          </a>
+        </li>
+        <li>
+          Data Service: 
+          <a
+            href="http://localhost:8003"
+            target="_blank"
+          >
+            Port 8003
+          </a>
+        </li>
+        <li>
+          API Gateway: 
+          <a
+            href="http://localhost:8080"
+            target="_blank"
+          >
+            Port 8080
+          </a>
+        </li>
+      </ul>
+    </div>
+  </main>
+</div>
+`;
