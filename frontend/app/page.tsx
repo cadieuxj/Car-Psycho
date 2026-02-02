@@ -1,20 +1,34 @@
+import { ServiceStatus, StatsCards, RecentActivity, QuickActions } from '@/components/dashboard';
+
 export default function Home() {
   return (
-    <main style={{ padding: '2rem', fontFamily: 'system-ui' }}>
-      <h1>Car-Psycho</h1>
-      <p>Psychometric Car Sales Platform</p>
-      <p style={{ color: '#666', marginTop: '1rem' }}>
-        Frontend under development...
-      </p>
-      <div style={{ marginTop: '2rem' }}>
-        <h2>Services Status</h2>
-        <ul>
-          <li>Manager Service: <a href="http://localhost:8001" target="_blank">Port 8001</a></li>
-          <li>Inference Service: <a href="http://localhost:8002" target="_blank">Port 8002</a></li>
-          <li>Data Service: <a href="http://localhost:8003" target="_blank">Port 8003</a></li>
-          <li>API Gateway: <a href="http://localhost:8080" target="_blank">Port 8080</a></li>
-        </ul>
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-gray-500 mt-1">
+            Welcome to Car-Psycho, your AI-powered psychometric sales platform
+          </p>
+        </div>
       </div>
-    </main>
-  )
+
+      {/* Stats Grid */}
+      <StatsCards />
+
+      {/* Main Content Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column - Service Status */}
+        <div className="lg:col-span-1 space-y-6">
+          <ServiceStatus />
+          <QuickActions />
+        </div>
+
+        {/* Right Column - Activity */}
+        <div className="lg:col-span-2">
+          <RecentActivity />
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -49,8 +49,8 @@ services:
   # Manager Service
   manager-service:
     build:
-      context: ./backend/services/manager
-      dockerfile: ../../../docker/backend.Dockerfile
+      context: .
+      dockerfile: docker/backend.Dockerfile
       args:
         SERVICE_DIR: services/manager
     container_name: carpsycho-manager
@@ -80,8 +80,8 @@ services:
   # Inference Service
   inference-service:
     build:
-      context: ./backend/services/inference
-      dockerfile: ../../../docker/backend.Dockerfile
+      context: .
+      dockerfile: docker/backend.Dockerfile
       args:
         SERVICE_DIR: services/inference
     container_name: carpsycho-inference
@@ -113,8 +113,8 @@ services:
   # Data Service
   data-service:
     build:
-      context: ./backend/services/data
-      dockerfile: ../../../docker/backend.Dockerfile
+      context: .
+      dockerfile: docker/backend.Dockerfile
       args:
         SERVICE_DIR: services/data
     container_name: carpsycho-data
@@ -146,8 +146,8 @@ services:
   # Frontend (Next.js)
   frontend:
     build:
-      context: ./frontend
-      dockerfile: ../docker/frontend.Dockerfile
+      context: .
+      dockerfile: docker/frontend.Dockerfile
     container_name: carpsycho-frontend
     environment:
       - NEXT_PUBLIC_API_BASE_URL=http://localhost:8080/api

@@ -5,14 +5,14 @@ FROM node:20-alpine
 # Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy package files from frontend directory
+COPY frontend/package*.json ./
 
 # Install dependencies
 RUN npm install
 
-# Copy application files
-COPY . .
+# Copy application files from frontend directory
+COPY frontend/ .
 
 # Expose port
 EXPOSE 3000
