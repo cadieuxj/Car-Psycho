@@ -1,1 +1,36 @@
 node_modules/
+.next/
+__pycache__/
+*.pyc
+.env
+*.pem
+
+# Data files (keep directory structure via .gitkeep)
+data/raw/*.jsonl
+data/raw/*.csv
+data/raw/*.json
+data/processed/*.jsonl
+data/processed/*.csv
+data/synthetic/*.jsonl
+data/car_questionnaire/*.json
+data/car_questionnaire/*.csv
+
+# Model files (keep directory structure via .gitkeep)
+models/saved/*/model.pt
+models/saved/*/config.json
+models/checkpoints/
+
+# Docker volumes
+postgres_data/
+chroma_data/
+redis_data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

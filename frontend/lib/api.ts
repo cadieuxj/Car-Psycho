@@ -4,11 +4,12 @@ import {
   TrainingConfig,
   Model,
   Dataset,
+  DatasetPreview,
+  DatasetStats,
   PredictionRequest,
   PredictionResponse,
   DataGenerationRequest,
   DataGenerationResponse,
-  ChatMessage,
   PersonalityProfile,
 } from './types';
 
@@ -36,13 +37,16 @@ class ApiClient {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: response.statusText }));
-      throw new Error(error.message || `API Error: ${response.status}`);
+      throw new Error(error.detail || error.message || `API Error: ${response.status}`);
     }
 
     return response.json();
   }
 
+  // ========================================================================
   // Health endpoints
+  // ========================================================================
+
   async getManagerHealth(): Promise<ServiceHealth> {
     try {
       return await this.request<ServiceHealth>('/api/training/health');
@@ -80,7 +84,10 @@ class ApiClient {
     return { manager, inference, data };
   }
 
+  // ========================================================================
   // Training Jobs
+  // ========================================================================
+
   async listJobs(): Promise<TrainingJob[]> {
     const response = await this.request<{ jobs: TrainingJob[] }>('/api/training/jobs');
     return response.jobs;
@@ -97,28 +104,81 @@ class ApiClient {
     return this.request<TrainingJob>(`/api/training/jobs/${jobId}`);
   }
 
-  async cancelJob(jobId: string): Promise<void> {
-    await this.request(`/api/training/jobs/${jobId}/cancel`, {
+  async stopJob(jobId: string): Promise<{ status: string; message: string }> {
+    return this.request(`/api/training/jobs/${jobId}/stop`, {
       method: 'POST',
     });
   }
 
+  async deleteJob(jobId: string): Promise<void> {
+    await this.request(`/api/training/jobs/${jobId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getDefaultConfig(): Promise<Record<string, unknown>> {
+    return this.request('/api/training/config/defaults');
+  }
+
+  // ========================================================================
   // Models
+  // ========================================================================
+
   async listModels(): Promise<Model[]> {
-    const response = await this.request<{ models: Model[] }>('/api/inference/models');
+    const response = await this.request<{ models: Model[] }>('/api/training/models');
     return response.models;
   }
 
   async getModel(modelId: string): Promise<Model> {
-    return this.request<Model>(`/api/inference/models/${modelId}`);
+    return this.request<Model>(`/api/training/models/${modelId}`);
   }
 
+  async loadModel(modelId: string): Promise<{ status: string; message: string }> {
+    return this.request(`/api/inference/models/${modelId}/load`, {
+      method: 'POST',
+    });
+  }
+
+  async unloadModel(modelId: string): Promise<{ status: string; message: string }> {
+    return this.request(`/api/inference/models/${modelId}/unload`, {
+      method: 'POST',
+    });
+  }
+
+  async deleteModel(modelId: string): Promise<void> {
+    await this.request(`/api/training/models/${modelId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getActiveModel(): Promise<Model | null> {
+    try {
+      return await this.request<Model>('/api/inference/models/active');
+    } catch {
+      return null;
+    }
+  }
+
+  // ========================================================================
   // Inference
+  // ========================================================================
+
   async predict(request: PredictionRequest): Promise<PredictionResponse> {
     return this.request<PredictionResponse>('/api/inference/predict', {
       method: 'POST',
       body: JSON.stringify(request),
     });
+  }
+
+  async predictBatch(texts: string[]): Promise<PredictionResponse[]> {
+    const response = await this.request<{ predictions: PredictionResponse[] }>(
+      '/api/inference/predict/batch',
+      {
+        method: 'POST',
+        body: JSON.stringify({ texts }),
+      }
+    );
+    return response.predictions;
   }
 
   async chat(
@@ -135,10 +195,37 @@ class ApiClient {
     });
   }
 
+  // ========================================================================
   // Datasets
+  // ========================================================================
+
   async listDatasets(): Promise<Dataset[]> {
     const response = await this.request<{ datasets: Dataset[] }>('/api/datasets/datasets');
     return response.datasets;
+  }
+
+  async getDataset(datasetId: string): Promise<Dataset> {
+    return this.request<Dataset>(`/api/datasets/datasets/${datasetId}`);
+  }
+
+  async scanDatasets(): Promise<{ found: number; new_datasets: number; message: string }> {
+    return this.request('/api/datasets/datasets/scan', {
+      method: 'POST',
+    });
+  }
+
+  async getDatasetPreview(datasetId: string): Promise<DatasetPreview> {
+    return this.request<DatasetPreview>(`/api/datasets/datasets/${datasetId}/preview`);
+  }
+
+  async getDatasetStats(datasetId: string): Promise<DatasetStats> {
+    return this.request<DatasetStats>(`/api/datasets/datasets/${datasetId}/stats`);
+  }
+
+  async deleteDataset(datasetId: string): Promise<void> {
+    await this.request(`/api/datasets/datasets/${datasetId}`, {
+      method: 'DELETE',
+    });
   }
 
   async generateData(request: DataGenerationRequest): Promise<DataGenerationResponse> {
@@ -153,6 +240,17 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ source }),
     });
+  }
+
+  // ========================================================================
+  // WebSocket URL helper
+  // ========================================================================
+
+  getTrainingWSUrl(jobId: string): string {
+    const wsBase = this.baseUrl
+      .replace('http://', 'ws://')
+      .replace('https://', 'wss://');
+    return `${wsBase}/ws/training/${jobId}`;
   }
 }
 

@@ -1,5 +1,5 @@
 # Car-Psycho Platform - Docker Backend Dependencies
-# Lighter version without heavy ML packages (for basic API functionality)
+# Full version with ML training packages for Docker-based training
 
 # ============================================================================
 # Web Framework & API
@@ -21,9 +21,16 @@ asyncpg==0.29.0
 # ChromaDB for vector storage
 chromadb==0.4.22
 
-# Redis for caching
+# Redis for caching and pub/sub
 redis==5.0.1
 hiredis==2.3.2
+
+# ============================================================================
+# ML Training (PyTorch CPU installed separately in Dockerfile)
+# ============================================================================
+# torch is installed in Dockerfile with --extra-index-url for CPU build
+numpy==1.26.3
+scikit-learn==1.4.0
 
 # ============================================================================
 # LLM APIs (for PsychSteer teacher models)
@@ -35,7 +42,6 @@ anthropic==0.21.3
 # Data Processing
 # ============================================================================
 pandas==2.2.0
-numpy==1.26.3
 jsonlines==4.0.0
 python-dotenv==1.0.1
 pyyaml==6.0.1
