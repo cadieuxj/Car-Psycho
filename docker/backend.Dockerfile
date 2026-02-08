@@ -21,11 +21,16 @@ RUN apt-get update && apt-get install -y \
 COPY requirements-docker.txt /app/requirements.txt
 
 # Install Python dependencies
-# Install PyTorch CPU first from the PyTorch index, then the rest
+# 1. Install PyTorch CPU from the PyTorch wheel index
+# 2. Install remaining requirements
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch==2.1.2+cpu --extra-index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir -r /app/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu 2>/dev/null || \
+    pip install --no-cache-dir \
+        torch==2.1.2 \
+        --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r /app/requirements.txt
+
+# Verify torch installed correctly
+RUN python -c "import torch; print(f'PyTorch {torch.__version__} installed successfully')"
 
 # Copy backend code
 COPY backend /app/backend

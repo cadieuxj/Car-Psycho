@@ -6,7 +6,7 @@ Handles trained model serving, OCEAN personality predictions, and analysis.
 import json, logging, os, re, time, uuid
 from typing import Any, Dict, List, Optional
 
-import psutil
+import resource
 import psycopg2
 import psycopg2.extras
 import torch
@@ -278,7 +278,8 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
-    mem = psutil.Process(os.getpid()).memory_info()
+    rusage = resource.getrusage(resource.RUSAGE_SELF)
+    rss_mb = round(rusage.ru_maxrss / 1024, 2)  # ru_maxrss is in KB on Linux
     return HealthResponse(
         status="healthy", service="inference", version="1.0.0",
         database="connected" if _db_available() else "unavailable",
@@ -286,8 +287,8 @@ async def health():
         loaded_model_name=_state.model_info["name"] if _state.model_info else None,
         device=_state.device,
         memory={
-            "rss_mb": round(mem.rss / 1048576, 2),
-            "vms_mb": round(mem.vms / 1048576, 2),
+            "rss_mb": rss_mb,
+            "vms_mb": 0,
             "gpu_available": torch.cuda.is_available(),
             "gpu_memory_allocated_mb": (
                 round(torch.cuda.memory_allocated() / 1048576, 2)
