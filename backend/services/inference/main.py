@@ -7,6 +7,7 @@ import json, logging, os, re, time, uuid
 from typing import Any, Dict, List, Optional
 
 import resource
+import httpx
 import psycopg2
 import psycopg2.extras
 import torch
@@ -45,6 +46,7 @@ NEGATIVE_WORDS = frozenset(
     "miserable negative painful ugly unhappy worried".split()
 )
 MODELS_DIR = "/app/models/saved"
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11434")
 _MODEL_COLS = ("id, name, version, model_type, base_model, description, "
                "storage_path, config, metrics, status, is_default, created_at, updated_at")
 
@@ -212,50 +214,31 @@ def _query_model(model_id: str) -> dict:
     return row
 
 # ---------------------------------------------------------------------------
-# Feature extraction
+# Ollama embeddings
 # ---------------------------------------------------------------------------
-def extract_features(text: str, feature_size: int = 768) -> torch.Tensor:
-    """Convert raw text into a fixed-size feature vector (20 NLP features, zero-padded)."""
-    words = re.findall(r"[a-zA-Z']+", text.lower())
-    wc = max(len(words), 1)
-    uniq = set(words)
-    sents = [s.strip() for s in re.split(r"[.!?]+", text) if s.strip()]
-    sc = max(len(sents), 1)
-    tlen = max(len(text), 1)
-    pos = sum(1 for w in words if w in POSITIVE_WORDS)
-    neg = sum(1 for w in words if w in NEGATIVE_WORDS)
-    fp = sum(1 for w in words if w in {"i", "me", "my", "mine", "myself"})
-    hedge = sum(1 for w in words if w in {"maybe", "perhaps", "possibly", "might",
-                "could", "seems", "apparently", "somewhat", "likely", "unlikely"})
-    punc = sum(1 for c in text if c in ".,;:!?-()\"'")
-    bigs = [f"{words[i]}_{words[i+1]}" for i in range(len(words) - 1)] if len(words) > 1 else []
-    stops = {"the", "a", "an", "is", "are", "was", "were", "and", "or", "but", "in", "on", "at", "to", "for"}
+async def get_ollama_embedding(text: str, model: str = "llama3.2:1b") -> torch.Tensor:
+    """Get embedding for a single text from Ollama."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+        resp = await client.post(
+            f"{OLLAMA_HOST}/api/embed",
+            json={"model": model, "input": text},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        embedding = data["embeddings"][0]
+        return torch.tensor(embedding, dtype=torch.float32)
 
-    feats = [
-        min(wc / 500, 1.0),                                        # word count
-        min(sum(len(w) for w in words) / (wc * 10), 1.0),          # avg word length
-        len(uniq) / wc,                                             # type-token ratio
-        pos / wc,                                                   # positive ratio
-        neg / wc,                                                   # negative ratio
-        text.count("?") / tlen,                                     # question marks
-        text.count("!") / tlen,                                     # exclamation marks
-        text.count(",") / tlen,                                     # comma density
-        min(wc / (sc * 30), 1.0),                                   # avg sentence length
-        sum(1 for c in text if c.isupper()) / tlen,                 # uppercase ratio
-        sum(1 for c in text if c.isdigit()) / tlen,                 # digit ratio
-        sum(1 for w in words if len(w) > 6) / wc,                  # long word ratio
-        sum(1 for w in words if len(w) <= 3) / wc,                 # short word ratio
-        sum(1 for w in words if w in stops) / wc,                   # stopword density
-        fp / wc,                                                    # first-person ratio
-        punc / tlen,                                                # punctuation density
-        len(set(bigs)) / max(len(bigs), 1) if bigs else 0.0,       # unique bigram ratio
-        min(text.count("\n") / 20, 1.0),                            # paragraph count
-        hedge / wc,                                                 # hedging ratio
-        (pos - neg) / wc,                                           # sentiment polarity
-    ]
-    t = torch.zeros(feature_size)
-    t[:len(feats)] = torch.tensor(feats, dtype=torch.float32)
-    return t
+
+async def get_ollama_embeddings_batch(texts: List[str], model: str = "llama3.2:1b") -> List[torch.Tensor]:
+    """Get embeddings for multiple texts from Ollama."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+        resp = await client.post(
+            f"{OLLAMA_HOST}/api/embed",
+            json={"model": model, "input": texts},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return [torch.tensor(e, dtype=torch.float32) for e in data["embeddings"]]
 
 # ---------------------------------------------------------------------------
 # FastAPI application
@@ -294,6 +277,7 @@ async def health():
                 round(torch.cuda.memory_allocated() / 1048576, 2)
                 if torch.cuda.is_available() else 0
             ),
+            "ollama_host": OLLAMA_HOST,
         },
     )
 
@@ -334,7 +318,9 @@ async def load_model(model_id: str):
     row = _query_model(model_id)
     model_name = row["name"]
     model_dir = os.path.join(MODELS_DIR, model_name)
-    model_path = os.path.join(model_dir, "model.pt")
+    model_path = os.path.join(model_dir, "model_final.pt")
+    if not os.path.isfile(model_path):
+        model_path = os.path.join(model_dir, "model.pt")
     config_path = os.path.join(model_dir, "config.json")
 
     if not os.path.isfile(model_path):
@@ -345,16 +331,25 @@ async def load_model(model_id: str):
         with open(config_path, "r") as f:
             config = json.load(f)
 
-    hidden_size = config.get("hidden_size", 768)
-    intermediate_size = config.get("intermediate_size", 256)
+    hidden_size = config.get("hidden_size", 2048)
+    intermediate_size = config.get("intermediate_size", 512)
     num_traits = config.get("num_traits", 5)
     dropout = config.get("dropout", 0.1)
 
     _state.clear()
     try:
         head = PersonalityPredictionHead(hidden_size, intermediate_size, num_traits, dropout)
-        state_dict = torch.load(model_path, map_location=_state.device, weights_only=True)
-        head.load_state_dict(state_dict)
+        checkpoint = torch.load(model_path, map_location=_state.device, weights_only=False)
+        # Handle both full checkpoint dict and raw state_dict
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            head.load_state_dict(checkpoint["model_state_dict"])
+            # Merge checkpoint config (has ollama_model, embedding_dim)
+            ckpt_config = checkpoint.get("config", {})
+            if isinstance(ckpt_config, dict):
+                for k, v in ckpt_config.items():
+                    config.setdefault(k, v)
+        else:
+            head.load_state_dict(checkpoint)
         head.to(_state.device)
         head.eval()
     except Exception as exc:
@@ -386,9 +381,10 @@ def _require_model() -> None:
         raise HTTPException(status_code=503,
                             detail="No model is loaded. Use POST /models/{id}/load first.")
 
-def _run_inference(text: str) -> OceanScores:
-    feat_size = _state.config.get("hidden_size", 768) if _state.config else 768
-    features = extract_features(text, feature_size=feat_size).unsqueeze(0).to(_state.device)
+async def _run_inference(text: str) -> OceanScores:
+    model_name = _state.config.get("ollama_model", "llama3.2:1b") if _state.config else "llama3.2:1b"
+    features = await get_ollama_embedding(text, model=model_name)
+    features = features.unsqueeze(0).to(_state.device)
     with torch.no_grad():
         output = _state.model(features)
     s = output.squeeze(0).cpu().tolist()
@@ -401,7 +397,7 @@ async def predict(request: PredictRequest):
     """Return OCEAN personality scores for a single text input."""
     _require_model()
     start = time.perf_counter()
-    scores = _run_inference(request.text)
+    scores = await _run_inference(request.text)
     return PredictResponse(scores=scores, model_id=_state.model_info["id"],
                            model_name=_state.model_info["name"],
                            inference_time_ms=round((time.perf_counter() - start) * 1000, 2))
@@ -411,7 +407,7 @@ async def predict_batch(request: BatchPredictRequest):
     """Return OCEAN personality scores for a batch of texts."""
     _require_model()
     start = time.perf_counter()
-    preds = [_run_inference(t) for t in request.texts]
+    preds = [await _run_inference(t) for t in request.texts]
     return BatchPredictResponse(predictions=preds, model_id=_state.model_info["id"],
                                 model_name=_state.model_info["name"], count=len(preds),
                                 total_inference_time_ms=round((time.perf_counter() - start) * 1000, 2))
@@ -421,7 +417,7 @@ async def analyze(request: PredictRequest):
     """Full analysis: personality prediction, trait descriptions, and confidence."""
     _require_model()
     start = time.perf_counter()
-    scores = _run_inference(request.text)
+    scores = await _run_inference(request.text)
     score_map = scores.model_dump()
     traits: List[TraitDetail] = []
     for name in TRAIT_NAMES:

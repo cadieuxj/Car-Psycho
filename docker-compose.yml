@@ -63,6 +63,7 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-carpsycho}:${POSTGRES_PASSWORD:-carpsycho_dev_pass}@postgres:5432/${POSTGRES_DB:-carpsycho}
       - REDIS_URL=redis://redis:6379
       - SERVICE_NAME=manager
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - T4_VM_HOST=${T4_VM_HOST}
       - T4_VM_USER=${T4_VM_USER}
       - T4_VM_SSH_KEY_PATH=/app/ssh/id_rsa
