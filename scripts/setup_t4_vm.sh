@@ -124,7 +124,9 @@ python3 -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(
 
 # Install Unsloth
 log_info "Installing Unsloth for optimized training..."
-pip install "unsloth[cu121-torch230] @ git+https://github.com/unslothai/unsloth.git"
+# Pin to a PyPI release that matches available unsloth_zoo versions to avoid resolver errors.
+UNSLOTH_VERSION="2026.1.4"
+pip install "unsloth[cu121-torch230]==${UNSLOTH_VERSION}" "unsloth_zoo==${UNSLOTH_VERSION}"
 
 # Install Axolotl
 log_info "Installing Axolotl..."
