@@ -516,6 +516,25 @@ def _extract_ocean_scores(rec: dict) -> Optional[List[float]]:
                 return [float(x) for x in ps[:5]]
             except (ValueError, TypeError):
                 continue
+    # -- Pandora / trait-level format ----------------------------------------
+    # e.g. {"trait": "openness", "level": "low"} -> assign a numeric score
+    # for the named trait, defaulting the rest to 0.5
+    trait_val = rec_lower.get("trait")
+    level_val = rec_lower.get("level")
+    if trait_val and level_val:
+        trait_str = str(trait_val).strip().lower()
+        level_str = str(level_val).strip().lower()
+        level_map = {
+            "very low": 0.1, "low": 0.25, "below average": 0.35,
+            "average": 0.5, "above average": 0.65,
+            "high": 0.75, "very high": 0.9,
+        }
+        if trait_str in TRAIT_NAMES and level_str in level_map:
+            scores = [0.5] * 5
+            idx = TRAIT_NAMES.index(trait_str)
+            scores[idx] = level_map[level_str]
+            return scores
+
     return None
 
 
@@ -525,6 +544,9 @@ TEXT_COLUMN_NAMES = {
     "description", "essay", "writing", "answer", "body", "input",
     "status", "tweet", "review", "title", "question", "prompt",
     "sentence", "utterance", "reply", "chat",
+    # Pandora / training data columns
+    "train_input", "train_output", "narrative", "literal",
+    "instruction", "train_instruction",
 }
 
 

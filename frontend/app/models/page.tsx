@@ -608,7 +608,7 @@ export default function ModelsPage() {
                           <div className="p-4 bg-blue-50 rounded-lg">
                             <p className="text-xs text-blue-600 mb-1">Final Loss</p>
                             <p className="text-2xl font-bold text-blue-900">
-                              {selectedModel.metrics.final_loss.toFixed(4)}
+                              {(selectedModel.metrics.final_loss ?? selectedModel.metrics.total_loss ?? 0).toFixed(4)}
                             </p>
                           </div>
                           <div className="p-4 bg-purple-50 rounded-lg">
@@ -616,7 +616,7 @@ export default function ModelsPage() {
                               Personality Loss
                             </p>
                             <p className="text-2xl font-bold text-purple-900">
-                              {selectedModel.metrics.personality_loss.toFixed(4)}
+                              {(selectedModel.metrics.personality_loss ?? 0).toFixed(4)}
                             </p>
                           </div>
                         </div>

@@ -321,7 +321,7 @@ function MetricsTab({
         <MetricCard
           label="Current Epoch"
           value={
-            m ? `${m.epoch}${m.total_epochs ? ` / ${m.total_epochs}` : ''}` : '--'
+            m?.epoch != null ? `${m.epoch}${m.total_epochs ? ` / ${m.total_epochs}` : ''}` : '--'
           }
           bgClass="bg-gray-50"
           textClass="text-gray-600"
@@ -329,7 +329,7 @@ function MetricsTab({
         <MetricCard
           label="Step"
           value={
-            m
+            m?.step != null
               ? `${m.step.toLocaleString()}${m.total_steps ? ` / ${m.total_steps.toLocaleString()}` : ''}`
               : '--'
           }
@@ -762,23 +762,35 @@ function NewJobModal({ open, onClose, onCreate, datasets, datasetsLoading }: New
                   placeholder="e.g. CarPsycho-v3"
                 />
               </div>
-              <div>
+              <div className="md:col-span-2">
                 <label className={labelCls}>Dataset</label>
-                <select
-                  className={inputCls}
-                  value={form.dataset_id}
-                  onChange={(e) => set('dataset_id', e.target.value)}
-                  disabled={datasetsLoading}
-                >
-                  <option value="">
-                    {datasetsLoading ? 'Loading datasets...' : 'Select a dataset'}
-                  </option>
-                  {datasets.map((ds) => (
-                    <option key={ds.id} value={ds.id}>
-                      {ds.name} ({ds.num_samples.toLocaleString()} samples)
+                <div className="flex gap-2">
+                  <select
+                    className={inputCls + ' flex-1'}
+                    value={datasets.some((ds) => ds.id === form.dataset_id) ? form.dataset_id : ''}
+                    onChange={(e) => set('dataset_id', e.target.value)}
+                    disabled={datasetsLoading}
+                  >
+                    <option value="">
+                      {datasetsLoading ? 'Loading...' : 'Select scanned dataset'}
                     </option>
-                  ))}
-                </select>
+                    {datasets.map((ds) => (
+                      <option key={ds.id} value={ds.id}>
+                        {ds.name} ({ds.num_samples.toLocaleString()} samples)
+                      </option>
+                    ))}
+                  </select>
+                  <span className="self-center text-xs text-gray-400">or</span>
+                  <input
+                    className={inputCls + ' flex-1'}
+                    value={datasets.some((ds) => ds.id === form.dataset_id) ? '' : form.dataset_id}
+                    onChange={(e) => set('dataset_id', e.target.value)}
+                    placeholder="Type dataset name or path"
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  Select a scanned dataset or type a filename (e.g. pandora, big5_chat, car_data)
+                </p>
               </div>
               <div>
                 <label className={labelCls}>Base Model</label>

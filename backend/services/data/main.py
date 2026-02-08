@@ -475,7 +475,7 @@ async def delete_dataset(dataset_id: str):
 # ---- Preview & Stats -------------------------------------------------------
 
 
-@app.get("/datasets/{dataset_id}/preview", response_model=list[SampleOut])
+@app.get("/datasets/{dataset_id}/preview")
 async def preview_dataset(dataset_id: str):
     """Return first 20 samples from a dataset (reads directly from file)."""
     try:
