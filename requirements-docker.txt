@@ -26,9 +26,10 @@ redis==5.0.1
 hiredis==2.3.2
 
 # ============================================================================
-# ML Training (PyTorch CPU installed separately in Dockerfile)
+# ML Training
 # ============================================================================
-# torch is installed in Dockerfile with --extra-index-url for CPU build
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.2
 numpy==1.26.3
 scikit-learn==1.4.0
 

@@ -200,8 +200,8 @@ class ApiClient {
   // ========================================================================
 
   async listDatasets(): Promise<Dataset[]> {
-    const response = await this.request<{ datasets: Dataset[] }>('/api/datasets/datasets');
-    return response.datasets;
+    const response = await this.request<Dataset[] | { datasets: Dataset[] }>('/api/datasets/datasets');
+    return Array.isArray(response) ? response : response.datasets ?? [];
   }
 
   async getDataset(datasetId: string): Promise<Dataset> {
