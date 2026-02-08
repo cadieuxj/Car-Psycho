@@ -609,6 +609,7 @@ function ConfigurationTab({ config }: { config: TrainingConfig }) {
       items: [
         { label: 'Job Name', value: config.job_name },
         { label: 'Base Model', value: config.model_base },
+        { label: 'Ollama Model', value: config.ollama_model || 'llama3.2:1b' },
         { label: 'Dataset', value: config.dataset_id },
       ],
     },
@@ -786,6 +787,20 @@ function NewJobModal({ open, onClose, onCreate, datasets, datasetsLoading }: New
                   value={form.model_base}
                   onChange={(e) => set('model_base', e.target.value)}
                 />
+              </div>
+              <div>
+                <label className={labelCls}>Ollama Model</label>
+                <select
+                  className={inputCls}
+                  value={form.ollama_model}
+                  onChange={(e) => set('ollama_model', e.target.value)}
+                >
+                  <option value="llama3.2:1b">Llama 3.2 1B</option>
+                  <option value="llama3.2:3b">Llama 3.2 3B</option>
+                  <option value="llama3.1:8b">Llama 3.1 8B</option>
+                  <option value="nomic-embed-text">Nomic Embed Text</option>
+                  <option value="mxbai-embed-large">MxBAI Embed Large</option>
+                </select>
               </div>
             </div>
           </fieldset>

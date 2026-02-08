@@ -24,13 +24,13 @@ export interface PersonalityProfile {
 
 // Service Health
 export interface ServiceHealth {
-  status: 'healthy' | 'unhealthy' | 'unknown';
+  status: 'healthy' | 'unhealthy' | 'unknown' | 'degraded';
   service: string;
   version?: string;
-  database?: string;
-  chromadb?: string;
-  redis?: string;
-  ollama?: string;
+  database?: unknown;
+  chromadb?: unknown;
+  redis?: unknown;
+  ollama?: unknown;
   t4_vm_host?: string;
   teacher_model?: string;
 }
@@ -112,6 +112,7 @@ export interface TrainingConfig {
   model_base: string;
   dataset_id: string;
   job_name: string;
+  ollama_model: string;
   epochs: number;
   batch_size: number;
   learning_rate: number;
@@ -326,6 +327,7 @@ export type TrainingWSMessage =
 
 export const DEFAULT_TRAINING_CONFIG: Omit<TrainingConfig, 'dataset_id' | 'job_name'> = {
   model_base: 'personality-mlp',
+  ollama_model: 'llama3.2:1b',
   epochs: 10,
   batch_size: 32,
   learning_rate: 0.001,
@@ -340,6 +342,6 @@ export const DEFAULT_TRAINING_CONFIG: Omit<TrainingConfig, 'dataset_id' | 'job_n
   weight_decay: 0.01,
   save_steps: 500,
   eval_steps: 100,
-  input_size: 768,
-  hidden_size: 256,
+  input_size: 2048,
+  hidden_size: 2048,
 };

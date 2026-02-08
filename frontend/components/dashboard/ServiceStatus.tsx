@@ -7,6 +7,15 @@ import { api } from '@/lib/api';
 import { ServiceHealth } from '@/lib/types';
 import { Server, Database, Brain, RefreshCw, Cpu } from 'lucide-react';
 
+function healthVal(v: unknown): string {
+  if (!v) return 'unknown';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'object' && v !== null && 'connected' in v) {
+    return (v as Record<string, unknown>).connected ? 'connected' : 'disconnected';
+  }
+  return String(v);
+}
+
 interface ServiceCardProps {
   name: string;
   health: ServiceHealth;
@@ -95,8 +104,8 @@ export default function ServiceStatus() {
               health={health.manager}
               icon={<Cpu className={`w-5 h-5 ${health.manager.status === 'healthy' ? 'text-green-600' : 'text-red-600'}`} />}
               details={[
-                { label: 'Database', value: health.manager.database || 'unknown' },
-                { label: 'Redis', value: health.manager.redis || 'unknown' },
+                { label: 'Database', value: healthVal(health.manager.database) },
+                { label: 'Redis', value: healthVal(health.manager.redis) },
                 { label: 'T4 VM', value: health.manager.t4_vm_host || 'not configured' },
               ]}
             />
@@ -105,9 +114,9 @@ export default function ServiceStatus() {
               health={health.inference}
               icon={<Brain className={`w-5 h-5 ${health.inference.status === 'healthy' ? 'text-green-600' : 'text-red-600'}`} />}
               details={[
-                { label: 'ChromaDB', value: health.inference.chromadb || 'unknown' },
-                { label: 'Ollama', value: health.inference.ollama || 'not configured' },
-                { label: 'Redis', value: health.inference.redis || 'unknown' },
+                { label: 'ChromaDB', value: healthVal(health.inference.chromadb) },
+                { label: 'Ollama', value: healthVal(health.inference.ollama) || 'not configured' },
+                { label: 'Redis', value: healthVal(health.inference.redis) },
               ]}
             />
             <ServiceCard
@@ -116,8 +125,8 @@ export default function ServiceStatus() {
               icon={<Database className={`w-5 h-5 ${health.data.status === 'healthy' ? 'text-green-600' : 'text-red-600'}`} />}
               details={[
                 { label: 'Teacher Model', value: health.data.teacher_model || 'not configured' },
-                { label: 'ChromaDB', value: health.data.chromadb || 'unknown' },
-                { label: 'Database', value: health.data.database || 'unknown' },
+                { label: 'ChromaDB', value: healthVal(health.data.chromadb) },
+                { label: 'Database', value: healthVal(health.data.database) },
               ]}
             />
           </>

@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras
+import httpx
 import redis
 import torch
 import torch.nn as nn
@@ -89,6 +90,7 @@ TRAIT_NAMES = [
     "neuroticism",
 ]
 SERVICE_VERSION = "1.0.0"
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11434")
 
 # ---------------------------------------------------------------------------
 # In-process state for running jobs
@@ -113,6 +115,7 @@ class JobStatus(str, Enum):
 class TrainingConfig(BaseModel):
     model_base: str = "personality-mlp"
     dataset_id: Optional[str] = None
+    ollama_model: str = Field(default="llama3.2:1b", description="Ollama model for embeddings")
     epochs: int = Field(default=10, ge=1, le=500)
     batch_size: int = Field(default=32, ge=1, le=512)
     learning_rate: float = Field(default=1e-3, gt=0, le=1.0)
@@ -127,8 +130,8 @@ class TrainingConfig(BaseModel):
     weight_decay: float = Field(default=0.01, ge=0.0)
     save_steps: int = Field(default=50, ge=1)
     eval_steps: int = Field(default=50, ge=1)
-    hidden_size: int = Field(default=256, ge=32)
-    intermediate_size: int = Field(default=128, ge=16)
+    hidden_size: int = Field(default=2048, ge=32)
+    intermediate_size: int = Field(default=512, ge=16)
     num_synthetic_samples: int = Field(default=1000, ge=10, le=100000)
     dropout: float = Field(default=0.1, ge=0.0, le=0.5)
 
@@ -516,47 +519,141 @@ def _extract_ocean_scores(rec: dict) -> Optional[List[float]]:
     return None
 
 
-def load_training_data(
+# Common text column names in personality datasets
+TEXT_COLUMN_NAMES = {
+    "text", "content", "message", "comment", "response", "post",
+    "description", "essay", "writing", "answer", "body", "input",
+    "status", "tweet", "review", "title", "question", "prompt",
+    "sentence", "utterance", "reply", "chat",
+}
+
+
+def _extract_text(rec: dict) -> Optional[str]:
+    """Extract text content from a record, checking common column names."""
+    rec_lower = {k.strip().lower(): v for k, v in rec.items()}
+    for name in TEXT_COLUMN_NAMES:
+        val = rec_lower.get(name)
+        if val and isinstance(val, str) and len(val.strip()) > 5:
+            return val.strip()
+    # Fallback: use the longest string value in the record
+    longest = ""
+    for v in rec.values():
+        if isinstance(v, str) and len(v) > len(longest):
+            longest = v
+    return longest.strip() if len(longest) > 5 else None
+
+
+async def get_ollama_embeddings(
+    texts: List[str],
+    model: str,
+    batch_size: int = 32,
+) -> List[List[float]]:
+    """Batch-fetch embeddings from Ollama /api/embed endpoint."""
+    all_embeddings: List[List[float]] = []
+    total = len(texts)
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(300.0, connect=30.0)
+    ) as client:
+        for i in range(0, total, batch_size):
+            batch = texts[i : i + batch_size]
+            try:
+                resp = await client.post(
+                    f"{OLLAMA_HOST}/api/embed",
+                    json={"model": model, "input": batch},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                all_embeddings.extend(data["embeddings"])
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "Ollama HTTP %d at batch %d/%d: %s",
+                    exc.response.status_code, i, total, exc.response.text[:200],
+                )
+                raise RuntimeError(
+                    f"Ollama embedding failed (HTTP {exc.response.status_code}). "
+                    f"Is '{model}' pulled? Run: ollama pull {model}"
+                ) from exc
+            except Exception as exc:
+                logger.error("Ollama embed error at batch %d/%d: %s", i, total, exc)
+                raise RuntimeError(f"Ollama connection failed: {exc}") from exc
+
+            logger.info(
+                "Embeddings: %d/%d samples", min(i + batch_size, total), total
+            )
+            await asyncio.sleep(0)
+
+    return all_embeddings
+
+
+async def load_training_data_async(
     config: TrainingConfig,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    job_id: str,
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """
-    Return (inputs, targets) tensors.
+    Return (inputs, targets, embedding_dim) using Ollama embeddings.
 
-    *inputs*  -- shape [N, hidden_size] (simulated hidden-state features)
-    *targets* -- shape [N, 5]           (OCEAN scores in [0, 1])
+    *inputs*  -- shape [N, embedding_dim] (Ollama embeddings)
+    *targets* -- shape [N, 5]             (OCEAN scores in [0, 1])
 
-    Loads CSV, JSONL, or JSON data from /app/data/, extracts personality scores,
-    and pairs them with random feature vectors.  Falls back to synthetic data
-    if no suitable dataset is found.
+    Loads CSV/JSONL/JSON data, extracts text + OCEAN scores, then calls
+    Ollama to generate embeddings for each text sample.
     """
-    hidden_size = config.hidden_size
-    records = _find_and_load_dataset(config)
+    records = await asyncio.get_event_loop().run_in_executor(
+        None, _find_and_load_dataset, config
+    )
+
+    texts: List[str] = []
+    targets_list: List[List[float]] = []
 
     if records:
-        targets_list = []
         for rec in records:
             scores = _extract_ocean_scores(rec)
-            if scores:
+            text = _extract_text(rec)
+            if scores and text:
+                texts.append(text)
                 targets_list.append(scores)
-        if targets_list:
-            n = len(targets_list)
-            logger.info("Loaded %d personality-score records from disk.", n)
-            targets = torch.tensor(targets_list, dtype=torch.float32).clamp(0, 1)
-            inputs = torch.randn(n, hidden_size)
-            return inputs, targets
-        else:
+        if not texts:
             logger.warning(
-                "Found %d records but none had valid OCEAN scores. "
-                "Expected columns: %s (or personality_scores/personality_labels dict).",
-                len(records), ", ".join(TRAIT_NAMES),
+                "Found %d records but none had BOTH text AND OCEAN scores. "
+                "Need a text column (%s) plus OCEAN columns (%s).",
+                len(records),
+                ", ".join(sorted(TEXT_COLUMN_NAMES)[:6]),
+                ", ".join(TRAIT_NAMES),
             )
 
-    # -- Fallback: generate synthetic data --------------------------------
+    if texts and targets_list:
+        n = len(texts)
+        logger.info("Loaded %d records with text + OCEAN scores.", n)
+
+        # Publish status so the frontend sees embedding progress
+        publish_metrics(job_id, {
+            "job_id": job_id,
+            "type": "status",
+            "message": f"Generating embeddings for {n} samples via {config.ollama_model}...",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        embeddings = await get_ollama_embeddings(
+            texts, config.ollama_model, batch_size=config.batch_size
+        )
+
+        embedding_dim = len(embeddings[0])
+        logger.info(
+            "Ollama embeddings ready: %d samples, dim=%d (model=%s)",
+            n, embedding_dim, config.ollama_model,
+        )
+
+        inputs = torch.tensor(embeddings, dtype=torch.float32)
+        targets = torch.tensor(targets_list, dtype=torch.float32).clamp(0, 1)
+        return inputs, targets, embedding_dim
+
+    # -- Fallback: synthetic random data (no real embeddings) ----------------
     n = config.num_synthetic_samples
-    logger.info("Generating %d synthetic training samples.", n)
-    inputs = torch.randn(n, hidden_size)
-    targets = torch.rand(n, 5)  # uniform [0, 1] for each OCEAN trait
-    return inputs, targets
+    logger.info("No suitable data found -- generating %d synthetic samples.", n)
+    inputs = torch.randn(n, config.hidden_size)
+    targets = torch.rand(n, 5)
+    return inputs, targets, config.hidden_size
 
 
 # ===================================================================== #
@@ -606,18 +703,27 @@ async def run_training_job(job_id: str, job_name: str, config: TrainingConfig):
         logger.error("DB error marking job running: %s", exc)
 
     try:
-        # -- Data ---------------------------------------------------------
-        inputs, targets = await asyncio.get_event_loop().run_in_executor(
-            None, load_training_data, config
+        # -- Data (Ollama embeddings) -------------------------------------
+        inputs, targets, embedding_dim = await load_training_data_async(
+            config, job_id
         )
         inputs = inputs.to(device)
         targets = targets.to(device)
         num_samples = inputs.size(0)
-        logger.info("Training data: %d samples, feature dim=%d", num_samples, inputs.size(1))
+        logger.info(
+            "Training data: %d samples, embedding dim=%d (model=%s)",
+            num_samples, embedding_dim, config.ollama_model,
+        )
 
-        # -- Model --------------------------------------------------------
+        # -- Model (auto-size input to match Ollama embeddings) -----------
+        actual_hidden = embedding_dim
+        if actual_hidden != config.hidden_size:
+            logger.info(
+                "Auto-adjusting hidden_size %d -> %d to match Ollama embeddings",
+                config.hidden_size, actual_hidden,
+            )
         model = PersonalityPredictionHead(
-            hidden_size=config.hidden_size,
+            hidden_size=actual_hidden,
             intermediate_size=config.intermediate_size,
             num_traits=5,
             dropout=config.dropout,
@@ -782,6 +888,8 @@ async def run_training_job(job_id: str, job_name: str, config: TrainingConfig):
                     "optimizer_state_dict": optimizer.state_dict(),
                     "config": config.model_dump(),
                     "loss_history": loss_history,
+                    "embedding_dim": embedding_dim,
+                    "ollama_model": config.ollama_model,
                 },
                 str(ckpt_path),
             )
@@ -803,6 +911,8 @@ async def run_training_job(job_id: str, job_name: str, config: TrainingConfig):
                 "config": config.model_dump(),
                 "loss_history": loss_history,
                 "trait_names": TRAIT_NAMES,
+                "ollama_model": config.ollama_model,
+                "embedding_dim": embedding_dim,
             },
             str(final_path),
         )
@@ -829,7 +939,7 @@ async def run_training_job(job_id: str, job_name: str, config: TrainingConfig):
                             model_version,
                             "personality-prediction-head",
                             config.model_base,
-                            f"Trained for {config.epochs} epochs. "
+                            f"Trained for {config.epochs} epochs on {config.ollama_model}. "
                             f"Final loss={final_metrics.get('total_loss', 'N/A')}",
                             str(job_ckpt_dir),
                             json.dumps(config.model_dump()),
@@ -1342,6 +1452,22 @@ async def health():
             torch.cuda.get_device_properties(0).total_mem / 1024 / 1024, 2
         )
 
+    # -- Ollama -----------------------------------------------------------
+    ollama_status: Dict[str, Any] = {"connected": False}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+            resp = await client.get(f"{OLLAMA_HOST}/api/tags")
+            if resp.status_code == 200:
+                tags = resp.json()
+                model_names = [m["name"] for m in tags.get("models", [])]
+                ollama_status = {
+                    "connected": True,
+                    "host": OLLAMA_HOST,
+                    "models": model_names,
+                }
+    except Exception as exc:
+        ollama_status = {"connected": False, "host": OLLAMA_HOST, "error": str(exc)}
+
     overall = "healthy" if db_status["connected"] and redis_status["connected"] else "degraded"
 
     return {
@@ -1351,6 +1477,7 @@ async def health():
         "database": db_status,
         "redis": redis_status,
         "gpu": gpu_status,
+        "ollama": ollama_status,
         "active_jobs": len(_active_tasks),
         "ml_imports": _ML_IMPORTS_OK,
         "data_dir_exists": DATA_DIR.exists(),
@@ -1367,6 +1494,7 @@ async def config_defaults():
         "descriptions": {
             "model_base": "Base model identifier or architecture name.",
             "dataset_id": "ID or filename stem of the dataset in /app/data/.",
+            "ollama_model": "Ollama model used for text embeddings (e.g. llama3.2:1b).",
             "epochs": "Number of full passes over the training data.",
             "batch_size": "Samples per forward pass.",
             "learning_rate": "Peak learning rate for AdamW optimizer.",
