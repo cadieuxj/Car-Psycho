@@ -243,18 +243,34 @@ def _extract_ocean_values(path: Path, fmt: str) -> dict[str, list[float]]:
     except Exception:
         return values
 
+    # Build column-name lookup: map various spellings to canonical trait names
+    # e.g. "Openness", "OPENNESS", "big5_openness", "O" -> "openness"
+    trait_aliases: dict[str, str] = {}
+    for t in OCEAN_TRAITS:
+        trait_aliases[t] = t
+        trait_aliases[t.capitalize()] = t
+        trait_aliases[t.upper()] = t
+        trait_aliases[t[0].upper()] = t  # O, C, E, A, N
+        trait_aliases[t[0].lower()] = t
+        trait_aliases[f"big5_{t}"] = t
+        trait_aliases[f"ocean_{t}"] = t
+
     for rec in records:
-        labels = rec.get("personality_labels") or rec
+        # Try nested personality_labels or personality_scores first
+        labels = rec.get("personality_labels") or rec.get("personality_scores") or rec.get("scores") or rec
         if isinstance(labels, str):
             try:
                 labels = json.loads(labels)
             except (json.JSONDecodeError, TypeError):
-                continue
-        for trait in OCEAN_TRAITS:
-            val = labels.get(trait)
-            if val is not None:
+                # If personality_labels is not JSON, fall back to the record itself
+                labels = rec
+        if not isinstance(labels, dict):
+            continue
+        for col_name, col_val in labels.items():
+            canon = trait_aliases.get(col_name) or trait_aliases.get(col_name.strip().lower())
+            if canon and col_val is not None:
                 try:
-                    values[trait].append(float(val))
+                    values[canon].append(float(col_val))
                 except (ValueError, TypeError):
                     continue
     return values
@@ -461,48 +477,64 @@ async def delete_dataset(dataset_id: str):
 
 @app.get("/datasets/{dataset_id}/preview", response_model=list[SampleOut])
 async def preview_dataset(dataset_id: str):
-    """Return first 20 samples from a dataset."""
+    """Return first 20 samples from a dataset (reads directly from file)."""
     try:
         uid = uuid.UUID(dataset_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid dataset ID format")
 
+    # Get dataset metadata to find file path
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT id FROM datasets WHERE id = %s", (uid,))
-                if not cur.fetchone():
-                    raise HTTPException(status_code=404, detail="Dataset not found")
-
                 cur.execute(
-                    """
-                    SELECT id, sample_data, personality_labels, car_profile,
-                           source_text, is_synthetic, created_at
-                    FROM data_samples
-                    WHERE dataset_id = %s
-                    ORDER BY created_at ASC
-                    LIMIT 20
-                    """,
-                    (uid,),
+                    "SELECT file_path, format FROM datasets WHERE id = %s", (uid,)
                 )
-                rows = _row_to_dict(cur)
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Dataset not found")
+                file_path, fmt = row[0], row[1]
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Database error: {exc}")
 
-    return [
-        SampleOut(
-            id=str(r["id"]),
-            sample_data=r.get("sample_data"),
-            personality_labels=r.get("personality_labels"),
-            car_profile=r.get("car_profile"),
-            source_text=r.get("source_text"),
-            is_synthetic=r.get("is_synthetic", False),
-            created_at=r.get("created_at"),
-        )
-        for r in rows
-    ]
+    # Read first 20 records directly from the file
+    samples: list[dict] = []
+    path = Path(file_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    try:
+        if fmt in ("csv", ".csv"):
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                reader = csv.DictReader(fh)
+                for i, row in enumerate(reader):
+                    if i >= 20:
+                        break
+                    samples.append(dict(row))
+        elif fmt in ("jsonl", ".jsonl"):
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh):
+                    if i >= 20:
+                        break
+                    line = line.strip()
+                    if line:
+                        try:
+                            samples.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+        elif fmt in ("json", ".json"):
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                data = json.load(fh)
+                if isinstance(data, list):
+                    samples = data[:20]
+                elif isinstance(data, dict):
+                    samples = [data]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error reading file: {exc}")
+
+    return {"dataset_id": dataset_id, "samples": samples, "total_samples": len(samples)}
 
 
 @app.get("/datasets/{dataset_id}/stats", response_model=DatasetStatsResponse)
@@ -685,39 +717,79 @@ async def scan_datasets():
 
 @app.post("/datasets/upload", response_model=UploadResponse)
 async def upload_dataset(file: UploadFile = File(...)):
-    """Upload a JSONL file as a new dataset."""
-    if not file.filename or not file.filename.endswith(".jsonl"):
-        raise HTTPException(status_code=400, detail="Only .jsonl files are supported")
+    """Upload a dataset file (.csv, .jsonl, or .json)."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in SUPPORTED_FORMATS:
+        raise HTTPException(status_code=400, detail=f"Unsupported format. Accepted: {', '.join(SUPPORTED_FORMATS)}")
 
     content = await file.read()
     text = content.decode("utf-8", errors="replace")
 
-    # Validate and count lines
-    lines = [ln for ln in text.splitlines() if ln.strip()]
+    # Parse based on format
     num_samples = 0
     schema: dict | None = None
-    ocean_vals: dict[str, list[float]] = {t: [] for t in OCEAN_TRAITS}
+    records: list[dict] = []
 
-    for line in lines:
+    if ext == ".csv":
+        import io
+        reader = csv.DictReader(io.StringIO(text))
+        for row in reader:
+            records.append(dict(row))
+        num_samples = len(records)
+        if records:
+            schema = {k: "str" for k in records[0].keys()}
+    elif ext == ".jsonl":
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+                num_samples += 1
+            except json.JSONDecodeError:
+                continue
+        if records and isinstance(records[0], dict):
+            schema = {k: type(v).__name__ for k, v in records[0].items()}
+    elif ext == ".json":
         try:
-            record = json.loads(line)
+            data = json.loads(text)
+            if isinstance(data, list):
+                records = [r for r in data if isinstance(r, dict)]
+            elif isinstance(data, dict):
+                records = [data]
+            num_samples = len(records)
+            if records:
+                schema = {k: type(v).__name__ for k, v in records[0].items()}
         except json.JSONDecodeError:
-            continue
-        num_samples += 1
-        if schema is None and isinstance(record, dict):
-            schema = {k: type(v).__name__ for k, v in record.items()}
-        labels = record.get("personality_labels", record)
-        if isinstance(labels, dict):
-            for trait in OCEAN_TRAITS:
-                val = labels.get(trait)
-                if val is not None:
-                    try:
-                        ocean_vals[trait].append(float(val))
-                    except (ValueError, TypeError):
-                        continue
+            raise HTTPException(status_code=400, detail="Invalid JSON file")
 
     if num_samples == 0:
-        raise HTTPException(status_code=400, detail="File contains no valid JSONL records")
+        raise HTTPException(status_code=400, detail=f"File contains no valid records ({ext} format)")
+
+    # Extract OCEAN trait values for stats
+    ocean_vals: dict[str, list[float]] = {t: [] for t in OCEAN_TRAITS}
+    trait_aliases = {}
+    for t in OCEAN_TRAITS:
+        for alias in (t, t.capitalize(), t.upper(), t[0].upper(), t[0].lower(), f"big5_{t}"):
+            trait_aliases[alias] = t
+
+    for rec in records:
+        labels = rec.get("personality_labels") or rec.get("personality_scores") or rec
+        if isinstance(labels, str):
+            try:
+                labels = json.loads(labels)
+            except (json.JSONDecodeError, TypeError):
+                labels = rec
+        if isinstance(labels, dict):
+            for col_name, col_val in labels.items():
+                canon = trait_aliases.get(col_name) or trait_aliases.get(col_name.strip().lower())
+                if canon and col_val is not None:
+                    try:
+                        ocean_vals[canon].append(float(col_val))
+                    except (ValueError, TypeError):
+                        continue
 
     # Persist file
     dest_dir = DATA_ROOT / "raw"
@@ -726,7 +798,7 @@ async def upload_dataset(file: UploadFile = File(...)):
     suffix = 1
     while dest_path.exists():
         stem = Path(file.filename).stem
-        dest_path = dest_dir / f"{stem}_{suffix}.jsonl"
+        dest_path = dest_dir / f"{stem}_{suffix}{ext}"
         suffix += 1
 
     with open(dest_path, "wb") as fh:
@@ -757,7 +829,7 @@ async def upload_dataset(file: UploadFile = File(...)):
                         "raw",
                         "upload",
                         str(dest_path),
-                        "jsonl",
+                        ext.lstrip("."),
                         num_samples,
                         json.dumps(schema),
                         json.dumps(file_stats),
