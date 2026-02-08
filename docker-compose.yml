@@ -35,7 +35,7 @@ services:
     networks:
       - carpsycho-network
 
-  # Redis for caching and pub/sub
+  # Redis for caching, pub/sub metrics streaming, and job coordination
   redis:
     image: redis:7-alpine
     container_name: carpsycho-redis
@@ -43,10 +43,15 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - carpsycho-network
 
-  # Manager Service
+  # Manager Service - Training orchestration, model registry
   manager-service:
     build:
       context: .
@@ -61,23 +66,24 @@ services:
       - T4_VM_HOST=${T4_VM_HOST}
       - T4_VM_USER=${T4_VM_USER}
       - T4_VM_SSH_KEY_PATH=/app/ssh/id_rsa
+      - DATA_DIR=/app/data
+      - MODELS_DIR=/app/models
     ports:
       - "8001:8000"
     volumes:
       - ./backend:/app/backend
       - ./data:/app/data
       - ./models:/app/models
-      - ${SSH_KEY_PATH:-~/.ssh/id_rsa}:/app/ssh/id_rsa:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     networks:
       - carpsycho-network
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
-  # Inference Service
+  # Inference Service - Model serving & predictions
   inference-service:
     build:
       context: .
@@ -94,6 +100,7 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MODELS_DIR=/app/models
     ports:
       - "8002:8000"
     volumes:
@@ -105,12 +112,12 @@ services:
       chromadb:
         condition: service_started
       redis:
-        condition: service_started
+        condition: service_healthy
     networks:
       - carpsycho-network
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
-  # Data Service
+  # Data Service - Dataset management & pipeline
   data-service:
     build:
       context: .
@@ -127,6 +134,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - TEACHER_MODEL=${TEACHER_MODEL:-gpt-4o}
+      - DATA_DIR=/app/data
     ports:
       - "8003:8000"
     volumes:
@@ -138,7 +146,7 @@ services:
       chromadb:
         condition: service_started
       redis:
-        condition: service_started
+        condition: service_healthy
     networks:
       - carpsycho-network
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -150,8 +158,8 @@ services:
       dockerfile: docker/frontend.Dockerfile
     container_name: carpsycho-frontend
     environment:
-      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8080/api
-      - NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8080
     ports:
       - "3000:3000"
     volumes:

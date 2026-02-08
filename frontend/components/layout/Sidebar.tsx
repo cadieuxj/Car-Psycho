@@ -13,6 +13,7 @@ import {
   Settings,
   Database,
   Cpu,
+  Box,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -20,11 +21,12 @@ import {
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Sales Assistant', href: '/assistant', icon: MessageSquare },
+  { name: 'Training', href: '/training', icon: Cpu },
+  { name: 'Models', href: '/models', icon: Box },
+  { name: 'Datasets', href: '/datasets', icon: Database },
   { name: 'Psychometrics', href: '/psychometrics', icon: Brain },
   { name: 'Recommendations', href: '/recommendations', icon: Car },
   { name: 'Customers', href: '/customers', icon: Users },
-  { name: 'Training', href: '/training', icon: Cpu },
-  { name: 'Datasets', href: '/datasets', icon: Database },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
 

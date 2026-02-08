@@ -1,5 +1,6 @@
 # Backend Dockerfile for Car-Psycho Microservices
 # Supports all three backend services: Manager, Inference, Data
+# Includes PyTorch CPU for ML training in Docker
 
 FROM python:3.11-slim
 
@@ -17,11 +18,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (for better caching)
-# Use lighter docker-specific requirements (without heavy ML packages)
 COPY requirements-docker.txt /app/requirements.txt
 
 # Install Python dependencies
+# Install PyTorch CPU first from the PyTorch index, then the rest
 RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch==2.1.2+cpu --extra-index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r /app/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu 2>/dev/null || \
     pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy backend code
@@ -32,11 +35,12 @@ RUN if [ -f "/app/backend/${SERVICE_DIR}/requirements.txt" ]; then \
         pip install --no-cache-dir -r "/app/backend/${SERVICE_DIR}/requirements.txt"; \
     fi
 
-# Set Python path
-ENV PYTHONPATH=/app/backend:$PYTHONPATH
+# Set Python path to include backend and ML modules
+ENV PYTHONPATH=/app/backend:/app/backend/ml:/app:$PYTHONPATH
 
 # Create necessary directories
-RUN mkdir -p /app/data /app/models /app/logs
+RUN mkdir -p /app/data/raw /app/data/processed /app/data/car_questionnaire /app/data/synthetic \
+    /app/models/checkpoints /app/models/saved /app/logs
 
 # Expose port
 EXPOSE 8000
