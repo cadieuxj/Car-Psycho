@@ -321,7 +321,7 @@ function MetricsTab({
         <MetricCard
           label="Current Epoch"
           value={
-            m ? `${m.epoch}${m.total_epochs ? ` / ${m.total_epochs}` : ''}` : '--'
+            m?.epoch != null ? `${m.epoch}${m.total_epochs ? ` / ${m.total_epochs}` : ''}` : '--'
           }
           bgClass="bg-gray-50"
           textClass="text-gray-600"
@@ -329,7 +329,7 @@ function MetricsTab({
         <MetricCard
           label="Step"
           value={
-            m
+            m?.step != null
               ? `${m.step.toLocaleString()}${m.total_steps ? ` / ${m.total_steps.toLocaleString()}` : ''}`
               : '--'
           }
