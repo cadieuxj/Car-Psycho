@@ -21,6 +21,7 @@ Endpoints:
 """
 
 import asyncio
+import csv
 import json
 import logging
 import math
@@ -358,25 +359,160 @@ class PersonalityPredictionHead(nn.Module):
 # ===================================================================== #
 
 
-def _load_jsonl_dataset(config: TrainingConfig) -> Optional[List[dict]]:
-    """Attempt to load JSONL training data from /app/data/."""
-    candidates: List[Path] = []
-    if config.dataset_id:
-        candidates.append(DATA_DIR / f"{config.dataset_id}.jsonl")
-        candidates.append(DATA_DIR / config.dataset_id / "train.jsonl")
-    candidates.extend(sorted(DATA_DIR.glob("*.jsonl")))
+def _load_csv_dataset(path: Path) -> Optional[List[dict]]:
+    """Load a CSV dataset and return records as list of dicts."""
+    logger.info("Loading CSV dataset from %s", path)
+    records = []
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            records.append(dict(row))
+    return records if records else None
 
-    for path in candidates:
-        if path.exists() and path.stat().st_size > 0:
-            logger.info("Loading dataset from %s", path)
-            records = []
-            with open(path, "r") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line:
-                        records.append(json.loads(line))
+
+def _load_jsonl_dataset(path: Path) -> Optional[List[dict]]:
+    """Load a JSONL dataset and return records as list of dicts."""
+    logger.info("Loading JSONL dataset from %s", path)
+    records = []
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return records if records else None
+
+
+def _load_json_dataset(path: Path) -> Optional[List[dict]]:
+    """Load a JSON dataset (array of objects) and return records."""
+    logger.info("Loading JSON dataset from %s", path)
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        data = json.load(fh)
+    if isinstance(data, list):
+        return data if data else None
+    return [data] if isinstance(data, dict) else None
+
+
+def _find_and_load_dataset(config: TrainingConfig) -> Optional[List[dict]]:
+    """
+    Search /app/data/ for dataset files (CSV, JSONL, JSON) and load the first one found.
+    Prioritises exact dataset_id match, then walks all subdirectories.
+    """
+    candidates: List[Path] = []
+
+    # 1. Exact match by dataset_id
+    if config.dataset_id:
+        for ext in (".csv", ".jsonl", ".json"):
+            candidates.append(DATA_DIR / f"{config.dataset_id}{ext}")
+            candidates.append(DATA_DIR / config.dataset_id / f"train{ext}")
+            candidates.append(DATA_DIR / config.dataset_id / f"data{ext}")
+        # Also try subdirectories matching dataset_id name
+        dsdir = DATA_DIR / config.dataset_id
+        if dsdir.is_dir():
+            for ext in (".csv", ".jsonl", ".json"):
+                candidates.extend(sorted(dsdir.glob(f"*{ext}")))
+
+    # 2. Glob all supported files recursively under /app/data/
+    for ext in ("*.csv", "*.jsonl", "*.json"):
+        candidates.extend(sorted(DATA_DIR.rglob(ext)))
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique: List[Path] = []
+    for p in candidates:
+        rp = p.resolve()
+        if rp not in seen:
+            seen.add(rp)
+            unique.append(p)
+
+    for path in unique:
+        if not path.exists() or path.stat().st_size == 0:
+            continue
+        ext = path.suffix.lower()
+        try:
+            if ext == ".csv":
+                records = _load_csv_dataset(path)
+            elif ext == ".jsonl":
+                records = _load_jsonl_dataset(path)
+            elif ext == ".json":
+                records = _load_json_dataset(path)
+            else:
+                continue
             if records:
+                logger.info("Found %d records in %s", len(records), path)
                 return records
+        except Exception as exc:
+            logger.warning("Failed to load %s: %s", path, exc)
+            continue
+    return None
+
+
+def _extract_ocean_scores(rec: dict) -> Optional[List[float]]:
+    """
+    Extract OCEAN personality scores from a single record.
+
+    Supports multiple formats:
+    - Direct columns: rec["openness"], rec["conscientiousness"], etc.
+    - Nested dict: rec["personality_scores"]["openness"], etc.
+    - Nested JSON string: rec["personality_labels"] = '{"openness": 0.7, ...}'
+    - List/tuple: rec["scores"] = [0.7, 0.8, ...]
+    """
+    # Build case-insensitive key map from the record
+    rec_lower = {k.strip().lower(): v for k, v in rec.items()}
+
+    # Try direct trait columns (common in CSV: "openness", "Openness", "OPENNESS")
+    direct = []
+    for t in TRAIT_NAMES:
+        val = rec.get(t) or rec_lower.get(t)
+        if val is not None:
+            try:
+                direct.append(float(val))
+            except (ValueError, TypeError):
+                break
+    if len(direct) == 5:
+        return direct
+
+    # Try prefixed columns (big5_openness, ocean_openness)
+    prefixed = []
+    for t in TRAIT_NAMES:
+        val = rec_lower.get(f"big5_{t}") or rec_lower.get(f"ocean_{t}")
+        if val is not None:
+            try:
+                prefixed.append(float(val))
+            except (ValueError, TypeError):
+                break
+    if len(prefixed) == 5:
+        return prefixed
+
+    # Try nested dict keys
+    for key in ("personality_scores", "scores", "personality_labels", "labels", "ocean"):
+        ps = rec.get(key)
+        if ps is None:
+            continue
+        # If it's a JSON string, parse it
+        if isinstance(ps, str):
+            try:
+                ps = json.loads(ps)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        if isinstance(ps, dict):
+            row = []
+            for t in TRAIT_NAMES:
+                val = ps.get(t, ps.get(t[0]))  # try full name or first letter
+                if val is not None:
+                    try:
+                        row.append(float(val))
+                    except (ValueError, TypeError):
+                        break
+            if len(row) == 5:
+                return row
+        elif isinstance(ps, (list, tuple)) and len(ps) >= 5:
+            try:
+                return [float(x) for x in ps[:5]]
+            except (ValueError, TypeError):
+                continue
     return None
 
 
@@ -389,31 +525,31 @@ def load_training_data(
     *inputs*  -- shape [N, hidden_size] (simulated hidden-state features)
     *targets* -- shape [N, 5]           (OCEAN scores in [0, 1])
 
-    If JSONL data exists on disk the personality scores are extracted and
-    random feature vectors are paired with them.  Otherwise fully synthetic
-    data is generated.
+    Loads CSV, JSONL, or JSON data from /app/data/, extracts personality scores,
+    and pairs them with random feature vectors.  Falls back to synthetic data
+    if no suitable dataset is found.
     """
     hidden_size = config.hidden_size
-    records = _load_jsonl_dataset(config)
+    records = _find_and_load_dataset(config)
 
     if records:
         targets_list = []
         for rec in records:
-            ps = rec.get("personality_scores") or rec.get("scores") or {}
-            if isinstance(ps, dict) and len(ps) >= 5:
-                row = [
-                    float(ps.get(t, ps.get(t[0], 0.5)))
-                    for t in TRAIT_NAMES
-                ]
-                targets_list.append(row)
-            elif isinstance(ps, (list, tuple)) and len(ps) >= 5:
-                targets_list.append([float(x) for x in ps[:5]])
+            scores = _extract_ocean_scores(rec)
+            if scores:
+                targets_list.append(scores)
         if targets_list:
             n = len(targets_list)
             logger.info("Loaded %d personality-score records from disk.", n)
             targets = torch.tensor(targets_list, dtype=torch.float32).clamp(0, 1)
             inputs = torch.randn(n, hidden_size)
             return inputs, targets
+        else:
+            logger.warning(
+                "Found %d records but none had valid OCEAN scores. "
+                "Expected columns: %s (or personality_scores/personality_labels dict).",
+                len(records), ", ".join(TRAIT_NAMES),
+            )
 
     # -- Fallback: generate synthetic data --------------------------------
     n = config.num_synthetic_samples
