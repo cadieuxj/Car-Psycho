@@ -498,13 +498,15 @@ function StatisticsTab({
   }
 
   // --- Build chart data ---
-  const traitComparison = TRAIT_KEYS.map((t) => ({
-    trait: OCEAN_LABELS[t],
-    mean: Number(effective.traits[t].mean.toFixed(3)),
-    fill: OCEAN_COLORS[t],
-  }));
+  const traitComparison = TRAIT_KEYS
+    .filter((t) => effective.traits?.[t])
+    .map((t) => ({
+      trait: OCEAN_LABELS[t],
+      mean: Number((effective.traits[t]?.mean ?? 0).toFixed(3)),
+      fill: OCEAN_COLORS[t],
+    }));
 
-  const sourceData = Object.entries(effective.source_breakdown).map(([name, count]) => ({
+  const sourceData = Object.entries(effective.source_breakdown ?? {}).map(([name, count]) => ({
     name,
     count,
   }));
@@ -526,7 +528,7 @@ function StatisticsTab({
             </div>
           </CardBody>
         </Card>
-        {TRAIT_KEYS.map((t) => (
+        {TRAIT_KEYS.filter((t) => effective.traits?.[t]).map((t) => (
           <Card key={t}>
             <CardBody className="flex items-center gap-3">
               <div
@@ -541,7 +543,7 @@ function StatisticsTab({
               <div>
                 <p className="text-xs text-gray-500">{OCEAN_LABELS[t]} Mean</p>
                 <p className="text-lg font-bold" style={{ color: OCEAN_COLORS[t] }}>
-                  {effective.traits[t].mean.toFixed(3)}
+                  {(effective.traits[t]?.mean ?? 0).toFixed(3)}
                 </p>
               </div>
             </CardBody>
@@ -569,7 +571,7 @@ function StatisticsTab({
                 </tr>
               </thead>
               <tbody>
-                {TRAIT_KEYS.map((t) => {
+                {TRAIT_KEYS.filter((t) => effective.traits?.[t]).map((t) => {
                   const ts = effective.traits[t];
                   return (
                     <tr key={t} className="border-b border-gray-100">
@@ -577,14 +579,14 @@ function StatisticsTab({
                         {OCEAN_LABELS[t]}
                       </td>
                       <td className="py-3">
-                        {ts.mean.toFixed(3)} +/- {ts.std.toFixed(3)}
+                        {(ts.mean ?? 0).toFixed(3)} +/- {(ts.std ?? 0).toFixed(3)}
                       </td>
-                      <td className="py-3">{ts.median.toFixed(3)}</td>
-                      <td className="py-3">{ts.min.toFixed(3)}</td>
-                      <td className="py-3">{ts.max.toFixed(3)}</td>
+                      <td className="py-3">{(ts.median ?? 0).toFixed(3)}</td>
+                      <td className="py-3">{(ts.min ?? 0).toFixed(3)}</td>
+                      <td className="py-3">{(ts.max ?? 0).toFixed(3)}</td>
                       <td className="py-3">
                         <Progress
-                          value={ts.mean * 100}
+                          value={(ts.mean ?? 0) * 100}
                           color={`bg-[${OCEAN_COLORS[t]}]`}
                           size="sm"
                         />
@@ -636,8 +638,8 @@ function StatisticsTab({
         </CardHeader>
         <CardBody>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {TRAIT_KEYS.map((t) => {
-              const histData = effective.traits[t].histogram.map((count, i) => ({
+            {TRAIT_KEYS.filter((t) => effective.traits?.[t]).map((t) => {
+              const histData = (effective.traits[t]?.histogram ?? []).map((count: number, i: number) => ({
                 bin: BIN_LABELS[i],
                 count,
               }));

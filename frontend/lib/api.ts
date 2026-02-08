@@ -219,7 +219,26 @@ class ApiClient {
   }
 
   async getDatasetStats(datasetId: string): Promise<DatasetStats> {
-    return this.request<DatasetStats>(`/api/datasets/datasets/${datasetId}/stats`);
+    const raw = await this.request<Record<string, unknown>>(`/api/datasets/datasets/${datasetId}/stats`);
+    // Backend returns { trait_distributions: { openness: { stats: {...}, histogram: [...] } } }
+    // Frontend expects { traits: { openness: { mean, std, ..., histogram: [...] } } }
+    const distributions = (raw.trait_distributions ?? raw.traits ?? {}) as Record<string, unknown>;
+    const traits: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(distributions)) {
+      const dist = val as Record<string, unknown>;
+      if (dist.stats && typeof dist.stats === 'object') {
+        const s = dist.stats as Record<string, number>;
+        const bins = Array.isArray(dist.histogram) ? dist.histogram.map((b: Record<string, number>) => b.count ?? 0) : [];
+        traits[key] = { ...s, histogram: bins };
+      } else {
+        traits[key] = dist;
+      }
+    }
+    return {
+      total_samples: (raw.total_samples as number) ?? 0,
+      traits: traits as DatasetStats['traits'],
+      source_breakdown: (raw.source_breakdown as Record<string, number>) ?? {},
+    };
   }
 
   async deleteDataset(datasetId: string): Promise<void> {
